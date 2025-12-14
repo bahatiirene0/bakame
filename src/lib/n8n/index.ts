@@ -2,13 +2,13 @@
  * n8n Integration Module
  *
  * Provides workflow orchestration capabilities for Bakame AI.
+ * GPT-4 decides which tools to use based on tool definitions - no keyword matching needed.
  */
 
 // Workflow registry and definitions
 export {
   WORKFLOW_REGISTRY,
   type WorkflowDefinition,
-  getEnabledWorkflows,
   getWorkflow,
   getWorkflowsByCategory,
 } from './registry';
@@ -21,13 +21,3 @@ export {
   checkN8nHealth,
   formatWorkflowResponse,
 } from './client';
-
-// Workflow matching and routing
-export {
-  type MatchResult,
-  matchWorkflow,
-  extractParameters,
-  getSuggestions,
-  shouldUseWorkflow,
-  getWorkflowCategories,
-} from './matcher';

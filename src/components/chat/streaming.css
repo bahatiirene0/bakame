@@ -1,0 +1,106 @@
+/**
+ * Streaming Animation Styles
+ *
+ * Smooth reveal effects for streaming content
+ */
+
+.streaming-renderer {
+  position: relative;
+}
+
+/* Smooth fade-in for content updates during streaming */
+.streaming-renderer.is-streaming > div {
+  animation: smoothReveal 0.15s ease-out;
+}
+
+/* New paragraphs, lists, etc fade in smoothly */
+.streaming-renderer.is-streaming p,
+.streaming-renderer.is-streaming li,
+.streaming-renderer.is-streaming h1,
+.streaming-renderer.is-streaming h2,
+.streaming-renderer.is-streaming h3,
+.streaming-renderer.is-streaming table,
+.streaming-renderer.is-streaming pre,
+.streaming-renderer.is-streaming blockquote {
+  animation: elementReveal 0.2s ease-out;
+}
+
+/* Last element gets special attention */
+.streaming-renderer.is-streaming > div > *:last-child {
+  animation: lastReveal 0.15s ease-out;
+}
+
+@keyframes smoothReveal {
+  from { opacity: 0.85; }
+  to { opacity: 1; }
+}
+
+@keyframes elementReveal {
+  from {
+    opacity: 0.7;
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lastReveal {
+  from {
+    opacity: 0.5;
+    filter: blur(0.5px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* Blinking cursor */
+.streaming-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 1.1em;
+  margin-left: 2px;
+  background: #22c55e;
+  border-radius: 1px;
+  vertical-align: text-bottom;
+  animation: cursorBlink 0.6s ease-in-out infinite;
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+/* Dark mode cursor */
+.dark .streaming-cursor {
+  background: #4ade80;
+}
+
+/* Math elements - ensure they render smoothly */
+.streaming-renderer .katex {
+  animation: mathReveal 0.2s ease-out;
+}
+
+@keyframes mathReveal {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+/* Table smooth reveal */
+.streaming-renderer.is-streaming table {
+  animation: tableReveal 0.25s ease-out;
+}
+
+@keyframes tableReveal {
+  from {
+    opacity: 0.5;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

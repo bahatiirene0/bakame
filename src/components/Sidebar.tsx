@@ -15,6 +15,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/store/chatStore';
 import { useAuthStore } from '@/store/authStore';
+import { useVoiceStore } from '@/store/voiceStore';
+import { useTranslation } from '@/store/languageStore';
 import { ChatSession } from '@/types';
 
 export default function Sidebar() {
@@ -35,6 +37,8 @@ export default function Sidebar() {
   } = useChatStore();
 
   const { user, profile, signOut } = useAuthStore();
+  const { openVoiceModal } = useVoiceStore();
+  const t = useTranslation();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
@@ -122,7 +126,7 @@ export default function Sidebar() {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
-            <span className="text-sm">Ikiganiro Gishya</span>
+            <span className="text-sm">{t.newChat}</span>
           </button>
         </div>
 
@@ -130,51 +134,77 @@ export default function Sidebar() {
         <div className="px-3 pt-3 pb-2 space-y-1.5">
           {/* Generate Images - Green (Rwanda) */}
           <button
+            onClick={() => {
+              // Create a new session and send image generation prompt
+              const sessionId = createSession();
+              if (sessionId) {
+                // Dispatch custom event with prompt suggestion
+                window.dispatchEvent(new CustomEvent('bakame:suggest-prompt', {
+                  detail: { prompt: 'Generate an image of ' }
+                }));
+              }
+              if (window.innerWidth < 1024) setSidebarOpen(false);
+            }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
               hover:bg-green-50 dark:hover:bg-green-500/10
               group transition-all duration-200"
-            title="Generate Images - Coming Soon"
+            title="Generate Images with DALL-E 3"
           >
             <svg className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.25}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
             </svg>
-            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">Generate Images</span>
-            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400 rounded">Soon</span>
+            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">{t.generateImages}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded">New</span>
           </button>
 
           {/* Generate Videos - Yellow (Rwanda) */}
           <button
+            onClick={() => {
+              // Create a new session and send video generation prompt
+              const sessionId = createSession();
+              if (sessionId) {
+                // Dispatch custom event with prompt suggestion
+                window.dispatchEvent(new CustomEvent('bakame:suggest-prompt', {
+                  detail: { prompt: 'Generate a video of ' }
+                }));
+              }
+              if (window.innerWidth < 1024) setSidebarOpen(false);
+            }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
               hover:bg-yellow-50 dark:hover:bg-yellow-500/10
               group transition-all duration-200"
-            title="Generate Videos - Coming Soon"
+            title="Generate Videos with Kling AI"
           >
             <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.25}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
             </svg>
-            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-yellow-600 dark:group-hover:text-yellow-400 transition-colors">Generate Videos</span>
-            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-yellow-100 dark:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 rounded">Soon</span>
+            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-yellow-600 dark:group-hover:text-yellow-400 transition-colors">{t.generateVideos}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded">New</span>
           </button>
 
           {/* Voice Assistant - Blue (Rwanda) */}
           <button
+            onClick={() => {
+              openVoiceModal();
+              if (window.innerWidth < 1024) setSidebarOpen(false);
+            }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
               hover:bg-blue-50 dark:hover:bg-blue-500/10
               group transition-all duration-200"
-            title="Voice Assistant - Coming Soon"
+            title="Voice Assistant"
           >
             <svg className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.25}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
             </svg>
-            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Voice Assistant</span>
-            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded">Soon</span>
+            <span className="text-sm text-gray-700 dark:text-gray-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{t.voiceAssistant}</span>
+            <span className="ml-auto px-1.5 py-0.5 text-[9px] font-medium bg-gradient-to-r from-green-500 to-blue-500 text-white rounded">New</span>
           </button>
         </div>
 
         {/* Chats Section */}
         <div className="px-3 pt-4 pb-2 flex items-center justify-between">
           <span className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider px-1">
-            Ibiganiro
+            {t.chats}
           </span>
           <span className="text-[10px] font-medium text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
             {sessions.length}
@@ -202,8 +232,8 @@ export default function Sidebar() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Nta biganiro</p>
-              <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">Tangira ikiganiro gishya!</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{t.noChats}</p>
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">{t.startNewChat}</p>
             </div>
           ) : (
             sessions.map((session, index) => (
@@ -270,7 +300,7 @@ export default function Sidebar() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
-                    Umwirondoro
+                    {t.profile}
                   </button>
                   <button
                     onClick={() => { setShowUserMenu(false); router.push('/profile'); }}
@@ -281,7 +311,7 @@ export default function Sidebar() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
-                    Igenamiterere
+                    {t.settings}
                   </button>
                 </div>
                 <div className="border-t border-gray-100 dark:border-white/10 py-1">
@@ -293,7 +323,7 @@ export default function Sidebar() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                     </svg>
-                    Sohoka
+                    {t.signOut}
                   </button>
                 </div>
               </div>
@@ -345,6 +375,7 @@ function SessionItem({
   disabled,
   isDeleting,
 }: SessionItemProps) {
+  const t = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [showMenu, setShowMenu] = useState(false);
@@ -454,7 +485,7 @@ function SessionItem({
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
                 </svg>
-                Hindura
+                {t.rename}
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMenu(false); onDelete(); }}
@@ -464,7 +495,7 @@ function SessionItem({
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
                 </svg>
-                Siba
+                {t.delete}
               </button>
             </div>
           )}

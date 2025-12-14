@@ -16,7 +16,6 @@ import { useThemeStore } from '@/store/themeStore';
 import { useChatStore } from '@/store/chatStore';
 import { useAuthStore } from '@/store/authStore';
 import { useLanguageStore, useTranslation } from '@/store/languageStore';
-// NOTE: SpecialistAgentsMenu removed - n8n workflows now handle domain expertise automatically
 
 export default function Header() {
   const router = useRouter();
@@ -169,8 +168,6 @@ export default function Header() {
               </svg>
             )}
           </button>
-
-          {/* Agent menu removed - Bakame now uses n8n workflows for all capabilities */}
         </div>
       </div>
     </header>

@@ -5,9 +5,12 @@
  * - Glassmorphism bubble
  * - Premium gradient dots
  * - Smooth animations
+ * - Full language support
  */
 
 'use client';
+
+import { useTranslation } from '@/store/languageStore';
 
 interface TypingIndicatorProps {
   variant?: 'thinking' | 'typing';
@@ -16,7 +19,8 @@ interface TypingIndicatorProps {
 export default function TypingIndicator({
   variant = 'thinking',
 }: TypingIndicatorProps) {
-  const text = variant === 'thinking' ? 'Bakame aratekereza' : 'Bakame arimo kwandika';
+  const t = useTranslation();
+  const text = variant === 'thinking' ? t.bakameThinking : t.bakameTyping;
 
   return (
     <div className="flex justify-start animate-fadeIn">

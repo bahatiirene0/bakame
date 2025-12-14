@@ -1,10 +1,26 @@
 /**
  * Supabase Library Exports
  *
- * Note: Server client is NOT exported here to avoid
+ * This module exports client-side Supabase functionality.
+ *
+ * IMPORTANT: Server-side clients are NOT exported here to avoid
  * importing 'next/headers' in client components.
- * Use: import { createServerSupabaseClient } from '@/lib/supabase/server'
+ *
+ * For server-side usage, import directly:
+ * ```typescript
+ * import { createServerSupabaseClient } from '@/lib/supabase/server';
+ * import { createServerSupabaseAdminClient } from '@/lib/supabase/server';
+ * ```
+ *
+ * @module lib/supabase
  */
 
-export { createClient, getSupabaseClient } from './client';
+// Client-side exports
+export {
+  createClient,
+  getSupabaseClient,
+  resetSupabaseClient,
+} from './client';
+
+// Type exports
 export * from './types';

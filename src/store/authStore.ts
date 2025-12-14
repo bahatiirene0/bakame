@@ -56,7 +56,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   // Set initial user from server (for SSR hydration)
   setInitialUser: (user: User) => {
-    console.log('[AUTH STORE] setInitialUser called with:', user.email);
     set({
       user,
       isLoading: false,
@@ -71,39 +70,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     // Prevent double initialization
     if (isInitialized) {
-      console.log('[AUTH STORE] Already initialized, skipping');
       return;
     }
 
-    console.log('[AUTH STORE] Starting initialization...');
-
     // Clean up any existing subscription to prevent memory leaks (important for HMR)
     if (authSubscription) {
-      console.log('[AUTH STORE] Cleaning up existing auth subscription');
       authSubscription.unsubscribe();
       authSubscription = null;
     }
 
     // Helper function to fetch profile and set state
     const updateAuthState = async (session: Session | null, source: string) => {
-      console.log(`[AUTH STORE] updateAuthState called from ${source}, session:`, !!session, 'user:', session?.user?.email || 'none');
-
       if (session?.user) {
-        console.log('[AUTH STORE] Fetching profile for user:', session.user.id);
         // Fetch user profile from database
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile } = await supabase
           .from('users')
           .select('*')
           .eq('id', session.user.id)
           .single();
 
-        if (profileError) {
-          console.log('[AUTH STORE] Profile fetch error (may be normal for new users):', profileError.message);
-        } else {
-          console.log('[AUTH STORE] Profile fetched:', profile?.name || profile?.email);
-        }
-
-        console.log('[AUTH STORE] Setting authenticated state for:', session.user.email);
         set({
           user: session.user,
           session,
@@ -112,7 +97,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isInitialized: true,
         });
       } else {
-        console.log('[AUTH STORE] No session, setting guest state');
         set({
           user: null,
           session: null,
@@ -125,15 +109,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     // Listen for auth state changes and store subscription for cleanup
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('[AUTH STORE] onAuthStateChange event:', event);
-
       // Only handle meaningful state changes
       if (event === 'SIGNED_IN') {
         // User just signed in
         await updateAuthState(session, `onAuthStateChange:${event}`);
       } else if (event === 'SIGNED_OUT') {
         // User signed out
-        console.log('[AUTH STORE] User signed out');
         set({
           user: null,
           session: null,
@@ -153,12 +134,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     authSubscription = subscription;
 
     // Get current session on page load
-    console.log('[AUTH STORE] Calling getSession()...');
-    const { data: { session }, error } = await supabase.auth.getSession();
-    console.log('[AUTH STORE] getSession result:', !!session, 'user:', session?.user?.email || 'none', 'error:', error?.message || 'none');
+    const { data: { session } } = await supabase.auth.getSession();
 
     await updateAuthState(session, 'getSession');
-    console.log('[AUTH STORE] Initialization complete');
   },
 
   // Sign in with Google OAuth
@@ -279,17 +257,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       signUpOptions.options.channel = 'sms';
     }
 
-    const { error, data: signUpData } = await supabase.auth.signUp(signUpOptions);
+    // @ts-expect-error - TypeScript can't narrow the union type properly here
+    const { error } = await supabase.auth.signUp(signUpOptions);
 
     set({ isLoading: false });
 
     if (error) {
-      console.error('SignUp error:', error);
       return { error };
     }
-
-    // Log signup response for debugging
-    console.log('SignUp response:', signUpData);
 
     return { error: null };
   },
@@ -338,14 +313,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const supabase = getSupabaseClient();
     set({ isLoading: true });
 
-    const { error, data } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/auth/callback`,
     });
 
     set({ isLoading: false });
-
-    // Log for debugging
-    console.log('Reset password response:', { error, data });
 
     if (error) {
       return { error };
@@ -387,8 +359,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Then sign out from Supabase (this also clears cookies/localStorage)
     try {
       await supabase.auth.signOut({ scope: 'local' });
-    } catch (error) {
-      console.error('Sign out error:', error);
+    } catch {
+      // Sign out failed - state already cleared locally
     }
   },
 

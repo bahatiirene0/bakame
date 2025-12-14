@@ -8,6 +8,8 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Header, ChatContainer, ChatInput, ThemeProvider, Sidebar, ErrorBoundary } from '@/components';
+import VoiceAssistant from '@/components/VoiceAssistant';
+import LocationPrompt from '@/components/LocationPrompt';
 import { useChatStore } from '@/store/chatStore';
 import { useAuthStore } from '@/store/authStore';
 import { useLanguageStore } from '@/store/languageStore';
@@ -100,6 +102,12 @@ export default function Home() {
             {(user || guestHasMessages) && <ChatInput />}
           </main>
         </div>
+
+        {/* Voice Assistant Modal */}
+        <VoiceAssistant />
+
+        {/* Location Permission Prompt */}
+        <LocationPrompt />
 
       </div>
     </ThemeProvider>

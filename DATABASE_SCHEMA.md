@@ -67,18 +67,9 @@
 
 ---
 
-## Future Specialist Agents Examples
+## Note on Domain Expertise
 
-| Agent | Slug | Description | Capabilities |
-|-------|------|-------------|--------------|
-| Bakame (Default) | `default` | General AI assistant | All tools |
-| Tax Expert | `tax-expert` | Rwanda tax guidance | Calculator, RRA info |
-| Legal Advisor | `legal-advisor` | Legal document help | Document analysis |
-| Business Coach | `business-coach` | Entrepreneurship help | Business tools |
-| Health Guide | `health-guide` | Health information | Medical info |
-| Edu Tutor | `edu-tutor` | Learning assistant | Quiz, explanations |
-| Code Helper | `code-helper` | Programming assistance | Code execution |
-| Kinyarwanda Teacher | `kiny-teacher` | Language learning | Translation |
+Domain expertise (tax, legal, business, health, education, etc.) is now handled dynamically by **n8n workflows** rather than static specialist agents. The `agents` table stores the default agent configuration but users do not select different agents. This architecture allows for more flexible and maintainable domain-specific behavior without requiring database changes.
 
 ---
 

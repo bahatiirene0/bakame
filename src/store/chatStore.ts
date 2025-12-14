@@ -24,9 +24,12 @@ import {
   MessageRole,
   AgentType,
   StreamChunk,
+  FileAttachment,
 } from '@/types';
 import { getSupabaseClient } from '@/lib/supabase';
 import { useUserSettingsStore } from '@/store/userSettingsStore';
+import { useLocationStore } from '@/store/locationStore';
+import { useLanguageStore } from '@/store/languageStore';
 import type {
   ChatSession as DbChatSession,
   Message as DbMessage
@@ -56,7 +59,6 @@ let isProcessingCrossTabMessage = false; // Prevent infinite loops
 const initCrossTabSync = (onMessage: (msg: CrossTabMessage) => void): void => {
   if (typeof window === 'undefined') return;
   if (typeof BroadcastChannel === 'undefined') {
-    console.log('[CROSS-TAB] BroadcastChannel not supported');
     return;
   }
 
@@ -73,16 +75,12 @@ const initCrossTabSync = (onMessage: (msg: CrossTabMessage) => void): void => {
 
       try {
         isProcessingCrossTabMessage = true;
-        console.log('[CROSS-TAB] Received:', event.data.type);
         onMessage(event.data);
       } finally {
         isProcessingCrossTabMessage = false;
       }
     };
-
-    console.log('[CROSS-TAB] Channel initialized');
   } catch (error) {
-    console.warn('[CROSS-TAB] Failed to initialize:', error);
     crossTabChannel = null;
   }
 };
@@ -93,9 +91,8 @@ const broadcastToOtherTabs = (message: CrossTabMessage): void => {
 
   try {
     crossTabChannel.postMessage(message);
-    console.log('[CROSS-TAB] Broadcast:', message.type);
-  } catch (error) {
-    console.warn('[CROSS-TAB] Failed to broadcast:', error);
+  } catch {
+    // Silent fail - not critical
   }
 };
 
@@ -105,7 +102,6 @@ let currentAbortController: AbortController | null = null;
 // Helper to safely abort any ongoing stream
 const abortCurrentStream = (): boolean => {
   if (currentAbortController) {
-    console.log('[CHAT STORE] Aborting current stream');
     currentAbortController.abort();
     currentAbortController = null;
     return true;
@@ -134,7 +130,6 @@ const withRetry = async <T>(
       }
       if (attempt < maxRetries - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
-        console.log(`[CHAT STORE] Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -205,7 +200,7 @@ interface ExtendedChatStore extends ChatStore {
   isDeleting: string | null; // Track which session is being deleted
   setCurrentUser: (user: User | null) => void;
   loadUserSessions: (userId: string) => Promise<void>;
-  syncSessionToDb: (session: ChatSession) => Promise<void>;
+  syncSessionToDb: (session: ChatSession) => Promise<boolean>;
   syncMessageToDb: (sessionId: string, message: Message) => Promise<void>;
   deleteSessionFromDb: (sessionId: string) => Promise<void>;
   // UX helpers
@@ -248,20 +243,16 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // Skip if already syncing to prevent race conditions
     if (state.isDbSyncing) {
-      console.log('[CHAT STORE] Already syncing, skipping setCurrentUser');
       return;
     }
 
-    console.log('[CHAT STORE] setCurrentUser:', previousUser?.id?.slice(0, 8), '->', user?.id?.slice(0, 8));
     set({ currentUser: user });
 
     if (user && !previousUser) {
       // User just logged in - load their sessions from database
-      console.log('[CHAT STORE] User logged in, loading sessions from DB');
       get().loadUserSessions(user.id);
     } else if (!user && previousUser) {
       // User logged out - clear sessions and load guest sessions
-      console.log('[CHAT STORE] User logged out, clearing sessions');
       set({ sessions: [], activeSessionId: null });
       get().loadFromStorage();
     }
@@ -275,19 +266,16 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // Prevent duplicate loads
     if (isDbSyncing) {
-      console.log('[CHAT STORE] Already syncing, skipping loadUserSessions');
       return;
     }
 
     // Validate userId
     if (!userId) {
-      console.log('[CHAT STORE] No userId provided, skipping loadUserSessions');
       return;
     }
 
     const supabase = getSupabaseClient();
     set({ isDbSyncing: true });
-    console.log('[CHAT STORE] Loading sessions for user:', userId.slice(0, 8));
 
     try {
       // Fetch user's chat sessions
@@ -352,13 +340,9 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         agentId: dbSession.agent_slug || 'default',
       }));
 
-      console.log('[CHAT STORE] Loaded', sessions.length, 'sessions with',
-        sessions.reduce((acc, s) => acc + s.messages.length, 0), 'total messages');
-
       // Verify user hasn't changed during async load (prevents stale data)
       const currentState = get();
       if (currentState.currentUser?.id !== userId) {
-        console.log('[CHAT STORE] User changed during load, discarding results');
         set({ isDbSyncing: false });
         return;
       }
@@ -368,8 +352,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         activeSessionId: sessions[0]?.id || null,
         isDbSyncing: false,
       });
-    } catch (error) {
-      console.error('[CHAT STORE] Failed to load user sessions:', error);
+    } catch {
       set({ isDbSyncing: false });
 
       // Only create fallback session if user is still logged in
@@ -387,7 +370,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
   /**
    * Sync a session to Supabase database
    */
-  syncSessionToDb: async (session: ChatSession) => {
+  syncSessionToDb: async (session: ChatSession): Promise<boolean> => {
     // Check both stores for user (handle timing issues)
     const { currentUser } = get();
     const { useAuthStore } = require('@/store/authStore');
@@ -395,14 +378,12 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
     const user = currentUser || authUser;
 
     if (!user) {
-      console.log('[CHAT STORE] No user, skipping session sync');
-      return;
+      return false;
     }
 
     const supabase = getSupabaseClient();
 
     try {
-      console.log('[CHAT STORE] Syncing session:', session.id.slice(0, 8), session.title);
 
       // First check if session exists and is not archived
       // This prevents accidentally syncing to archived sessions
@@ -413,8 +394,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         .single();
 
       if ((existing as { is_archived?: boolean } | null)?.is_archived) {
-        console.log('[CHAT STORE] Session is archived, skipping sync:', session.id.slice(0, 8));
-        return;
+        return false;
       }
 
       const { error } = await supabase
@@ -425,40 +405,41 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
           title: session.title,
           agent_slug: session.agentId || 'default',
           is_archived: false, // Explicitly set for new sessions
+          created_at: session.createdAt.toISOString(),
           updated_at: new Date().toISOString(),
         } as never);
 
       if (error) {
-        console.error('[CHAT STORE] Session sync error:', error.message, error.details);
+        return false;
       } else {
-        console.log('[CHAT STORE] Session synced successfully');
+        return true;
       }
-    } catch (error) {
-      console.error('[CHAT STORE] Failed to sync session:', error);
+    } catch {
+      return false;
     }
   },
 
   /**
    * Sync a message to Supabase database
    * Falls back to localStorage on auth errors to prevent data loss
+   * Handles race condition where session might not be synced yet
    */
   syncMessageToDb: async (sessionId: string, message: Message) => {
     // Check both stores for user (handle timing issues)
-    const { currentUser } = get();
+    const { currentUser, syncSessionToDb, sessions } = get();
     const { useAuthStore } = require('@/store/authStore');
     const authUser = useAuthStore.getState().user;
     const user = currentUser || authUser;
 
     if (!user) {
-      console.log('[CHAT STORE] No user, falling back to localStorage');
       get().saveToStorage();
       return;
     }
 
     const supabase = getSupabaseClient();
 
-    try {
-      console.log('[CHAT STORE] Syncing message:', message.id.slice(0, 8), message.role);
+    // Helper to attempt message sync
+    const attemptSync = async (): Promise<boolean> => {
       const { error: msgError } = await supabase
         .from('messages')
         .upsert({
@@ -470,16 +451,43 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         } as never);
 
       if (msgError) {
-        console.error('[CHAT STORE] Message sync error:', msgError.message, msgError.details);
-        // Check for auth-related errors (session expired, unauthorized)
-        if (msgError.message?.includes('JWT') ||
-            msgError.message?.includes('auth') ||
-            msgError.code === 'PGRST301' ||
-            msgError.code === '401') {
-          console.log('[CHAT STORE] Auth error during sync, falling back to localStorage');
-          get().saveToStorage();
+        return false;
+      }
+      return true;
+    };
+
+    try {
+
+      // Find the session first
+      const session = sessions.find(s => s.id === sessionId);
+
+      // Ensure session exists in database BEFORE trying to insert message
+      if (session) {
+        const sessionSynced = await syncSessionToDb(session);
+        if (!sessionSynced) {
+          // Wait and retry session sync
+          await new Promise(resolve => setTimeout(resolve, 300));
+          await syncSessionToDb(session);
         }
-        return;
+        // Small delay to ensure session is committed
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      // First attempt
+      let success = await attemptSync();
+
+      // If failed due to RLS (session not synced yet), wait and retry
+      if (!success) {
+        // Wait longer and retry
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Retry message sync
+        success = await attemptSync();
+
+        if (!success) {
+          get().saveToStorage();
+          return;
+        }
       }
 
       // Update session's updated_at
@@ -489,14 +497,10 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         .eq('id', sessionId);
 
       if (sessionError) {
-        console.error('[CHAT STORE] Session update error:', sessionError.message);
-      } else {
-        console.log('[CHAT STORE] Message synced successfully');
+        // Session update failed, but message was synced
       }
-    } catch (error) {
-      console.error('[CHAT STORE] Failed to sync message:', error);
+    } catch {
       // On any error, save to localStorage as fallback
-      console.log('[CHAT STORE] Saving to localStorage as fallback');
       get().saveToStorage();
     }
   },
@@ -512,11 +516,9 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
     const user = currentUser || authUser;
 
     if (!user) {
-      console.log('[CHAT STORE] No user, skipping deleteSessionFromDb');
       return;
     }
 
-    console.log('[CHAT STORE] Archiving session:', sessionId.slice(0, 8));
     const supabase = getSupabaseClient();
 
     try {
@@ -530,14 +532,11 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
           .select();
 
         if (error) {
-          console.error('[CHAT STORE] Archive error:', error.message);
           throw error;
         }
-
-        console.log('[CHAT STORE] Session archived successfully:', sessionId.slice(0, 8), 'rows affected:', data?.length || 0);
       }, 2, 500); // 2 retries, 500ms base delay
-    } catch (error) {
-      console.error('[CHAT STORE] Failed to archive session:', error);
+    } catch {
+      // Failed to archive - session will still be removed locally
     }
   },
 
@@ -561,7 +560,6 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // If authStore has user but chatStore doesn't, sync it now
     if (!currentUser && authUser) {
-      console.log('[CHAT STORE] createSession: syncing user from authStore');
       set({ currentUser: authUser });
     }
 
@@ -574,7 +572,6 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
       );
 
       if (emptySession) {
-        console.log('[CHAT STORE] Found existing empty session, switching to it:', emptySession.id.slice(0, 8));
         // Just switch to the existing empty session
         set({
           activeSessionId: emptySession.id,
@@ -588,7 +585,6 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
     // Check if current active session is empty (no messages) - reuse it with new agent
     const currentSession = sessions.find(s => s.id === activeSessionId);
     if (currentSession && currentSession.messages.length === 0 && agentId) {
-      console.log('[CHAT STORE] Reusing current empty session with new agent:', agentId);
       // Update the existing session's agent instead of creating new
       const updatedTitle = title || currentSession.title;
       set((state) => ({
@@ -611,27 +607,19 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
     // Create new session
     const newSession = createNewSession(title, agentId);
 
-    console.log('[CHAT STORE] createSession called, currentUser:', currentUser?.id?.slice(0, 8) || 'null',
-      'authUser:', authUser?.id?.slice(0, 8) || 'null', 'isLoggedIn:', isLoggedIn, 'agentId:', agentId);
-
     if (isLoggedIn) {
       // Logged-in users can have multiple sessions
-      console.log('[CHAT STORE] Creating new session for logged-in user, adding to existing sessions');
-      set((state) => {
-        console.log('[CHAT STORE] Existing sessions count:', state.sessions.length);
-        return {
-          sessions: [newSession, ...state.sessions],
-          activeSessionId: newSession.id,
-          error: null,
-          currentAgent: (agentId || 'default') as AgentType,
-        };
-      });
+      set((state) => ({
+        sessions: [newSession, ...state.sessions],
+        activeSessionId: newSession.id,
+        error: null,
+        currentAgent: (agentId || 'default') as AgentType,
+      }));
       syncSessionToDb(newSession);
       // Broadcast to other tabs
       broadcastToOtherTabs({ type: 'SESSION_CREATED', session: newSession });
     } else {
       // Guests: Replace with single fresh session (no multiple chats)
-      console.log('[CHAT STORE] Creating session for guest user (replacing all)');
       set({
         sessions: [newSession],
         activeSessionId: newSession.id,
@@ -654,13 +642,11 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // Prevent deletion while already deleting another session
     if (isDeleting) {
-      console.log('[CHAT STORE] Cannot delete: already deleting another session');
       return;
     }
 
     // If trying to delete the active session while streaming, abort the stream first
     if (isStreaming && sessionId === activeSessionId) {
-      console.log('[CHAT STORE] Aborting stream before deleting active session');
       abortCurrentStream();
       // Also clean up the streaming message state
       set({ isStreaming: false, streamingMessageId: null });
@@ -791,7 +777,6 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // Abort any ongoing stream before switching sessions
     if (isStreaming) {
-      console.log('[CHAT STORE] Aborting stream due to session switch');
       abortCurrentStream();
     }
 
@@ -812,7 +797,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
   /**
    * Add a message to the active session
    */
-  addMessage: (role: MessageRole, content: string, isStreaming = false): string => {
+  addMessage: (role: MessageRole, content: string, isStreaming = false, attachments?: FileAttachment[]): string => {
     const { activeSessionId, currentUser, syncMessageToDb, syncSessionToDb } = get();
     if (!activeSessionId) return '';
 
@@ -823,6 +808,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
       content,
       timestamp: new Date(),
       isStreaming,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
     };
 
     // Track if title was updated
@@ -1029,7 +1015,7 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
   // SEND MESSAGE WITH STREAMING
   // ============================================
 
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, attachments: FileAttachment[] = [], skipAddUserMessage = false) => {
     const {
       activeSessionId,
       sessions,
@@ -1052,7 +1038,6 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
 
     // Don't send if already streaming
     if (isStreaming) {
-      console.warn('Already streaming, ignoring new request');
       return;
     }
 
@@ -1068,8 +1053,10 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
       sessionId = createSession();
     }
 
-    // Add user message
-    addMessage('user', content);
+    // Add user message with attachments (skip when editing/regenerating)
+    if (!skipAddUserMessage) {
+      addMessage('user', content, false, attachments);
+    }
     setLoading(true);
     setError(null);
 
@@ -1082,10 +1069,8 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
     const signal = currentAbortController.signal;
 
     // Set a timeout for the initial connection (30 seconds)
-    // Note: This is for the initial response, not the streaming
     const connectionTimeoutId = setTimeout(() => {
       if (currentAbortController) {
-        console.warn('[CHAT STORE] Connection timeout - aborting request');
         currentAbortController.abort(new Error('Connection timeout - server took too long to respond'));
       }
     }, 30000);
@@ -1138,6 +1123,15 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
         return Object.keys(nonDefaults).length > 0 ? nonDefaults : null;
       })();
 
+      // Get user location if available (for maps/directions tool)
+      const locationState = useLocationStore.getState();
+      const userLocation = locationState.latitude !== null && locationState.longitude !== null
+        ? { latitude: locationState.latitude, longitude: locationState.longitude }
+        : null;
+
+      // Get UI language to ensure AI responds in the same language
+      const uiLanguage = useLanguageStore.getState().language;
+
       // Call streaming API endpoint
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -1146,6 +1140,9 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
           messages: apiMessages,
           specialistId: currentAgent, // Maps to specialist prompt
           userSettings, // User AI personalization settings
+          userLocation, // User's browser location for maps/directions
+          attachments, // File attachments (images, documents)
+          uiLanguage, // UI language - AI responds in this language
         }),
         signal,
       });
@@ -1190,6 +1187,76 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
             try {
               const parsed: StreamChunk = JSON.parse(data);
               if (parsed.error) throw new Error(parsed.error);
+
+              // Handle tool call indicator
+              if (parsed.toolCall) {
+                // Update message with tool name for loading indicator
+                set((state) => ({
+                  sessions: state.sessions.map((session) => {
+                    if (session.id !== get().activeSessionId) return session;
+                    return {
+                      ...session,
+                      messages: session.messages.map((msg) =>
+                        msg.id === assistantMessageId
+                          ? { ...msg, toolName: parsed.toolCall }
+                          : msg
+                      ),
+                    };
+                  }),
+                }));
+              }
+
+              // Handle generated image
+              if (parsed.generatedImage) {
+                set((state) => ({
+                  sessions: state.sessions.map((session) => {
+                    if (session.id !== get().activeSessionId) return session;
+                    return {
+                      ...session,
+                      messages: session.messages.map((msg) =>
+                        msg.id === assistantMessageId
+                          ? { ...msg, generatedImage: parsed.generatedImage }
+                          : msg
+                      ),
+                    };
+                  }),
+                }));
+              }
+
+              // Handle generated video
+              if (parsed.generatedVideo) {
+                set((state) => ({
+                  sessions: state.sessions.map((session) => {
+                    if (session.id !== get().activeSessionId) return session;
+                    return {
+                      ...session,
+                      messages: session.messages.map((msg) =>
+                        msg.id === assistantMessageId
+                          ? { ...msg, generatedVideo: parsed.generatedVideo }
+                          : msg
+                      ),
+                    };
+                  }),
+                }));
+              }
+
+              // Handle code execution output
+              if (parsed.codeOutput) {
+                set((state) => ({
+                  sessions: state.sessions.map((session) => {
+                    if (session.id !== get().activeSessionId) return session;
+                    return {
+                      ...session,
+                      messages: session.messages.map((msg) =>
+                        msg.id === assistantMessageId
+                          ? { ...msg, codeOutput: parsed.codeOutput }
+                          : msg
+                      ),
+                    };
+                  }),
+                }));
+              }
+
               if (parsed.content) {
                 appendToMessage(assistantMessageId, parsed.content);
               }
@@ -1209,13 +1276,11 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
       clearTimeout(connectionTimeoutId);
 
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Request aborted');
         return;
       }
 
       // Skip state updates if signal was aborted (prevents updates after unmount)
       if (signal.aborted) {
-        console.log('Signal aborted, skipping error state update');
         return;
       }
 
@@ -1253,6 +1318,98 @@ export const useChatStore = create<ExtendedChatStore>((set, get) => ({
       isStreaming: false,
       streamingMessageId: null,
     });
+  },
+
+  /**
+   * Edit a previous user message and regenerate AI response
+   * - Truncates all messages after the edited message
+   * - Updates the edited message content
+   * - Re-sends to API to get new AI response
+   */
+  editMessageAndRegenerate: async (messageId: string, newContent: string) => {
+    const {
+      activeSessionId,
+      sessions,
+      currentUser,
+      isStreaming,
+      sendMessage,
+    } = get();
+
+    // Can't edit while streaming
+    if (isStreaming) {
+      return;
+    }
+
+    if (!activeSessionId) return;
+
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+
+    // Find the message index
+    const messageIndex = session.messages.findIndex(m => m.id === messageId);
+    if (messageIndex === -1) return;
+
+    const message = session.messages[messageIndex];
+
+    // Only user messages can be edited
+    if (message.role !== 'user') {
+      return;
+    }
+
+    // Get message IDs to delete from database (all messages after the edited one)
+    const messagesToDelete = session.messages.slice(messageIndex + 1).map(m => m.id);
+
+    // Update state: truncate messages and update the edited message
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== activeSessionId) return s;
+
+        // Keep only messages up to and including the edited one
+        const truncatedMessages = s.messages.slice(0, messageIndex);
+
+        // Add the edited message with new content
+        const editedMessage: Message = {
+          ...message,
+          content: newContent,
+        };
+
+        return {
+          ...s,
+          messages: [...truncatedMessages, editedMessage],
+          updatedAt: new Date(),
+        };
+      }),
+    }));
+
+    // Delete removed messages from database (if logged in)
+    if (currentUser && messagesToDelete.length > 0) {
+      const supabase = getSupabaseClient();
+      try {
+        await supabase
+          .from('messages')
+          .delete()
+          .in('id', messagesToDelete);
+      } catch {
+        // Failed to delete messages - not critical
+      }
+
+      // Update the edited message in database
+      try {
+        await supabase
+          .from('messages')
+          .update({ content: newContent } as never)
+          .eq('id', messageId);
+      } catch {
+        // Failed to update message - not critical
+      }
+    }
+
+    // Get attachments from the original message (if any)
+    const attachments = message.attachments || [];
+
+    // Re-send the edited message to get new AI response
+    // Pass true to skip adding user message (we already have the edited message)
+    await sendMessage(newContent, attachments, true);
   },
 
   // ============================================
@@ -1356,7 +1513,6 @@ if (typeof window !== 'undefined') {
             useChatStore.setState((prev) => ({
               sessions: [message.session, ...prev.sessions],
             }));
-            console.log('[CROSS-TAB] Added session from other tab:', message.session.id.slice(0, 8));
           }
           break;
         }
@@ -1374,7 +1530,6 @@ if (typeof window !== 'undefined') {
             }
 
             useChatStore.setState(newState);
-            console.log('[CROSS-TAB] Removed session from other tab:', message.sessionId.slice(0, 8));
           }
           break;
         }
@@ -1388,7 +1543,6 @@ if (typeof window !== 'undefined') {
                 : s
             ),
           }));
-          console.log('[CROSS-TAB] Renamed session from other tab:', message.sessionId.slice(0, 8));
           break;
         }
 

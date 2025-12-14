@@ -8,29 +8,36 @@
  * - Animated send button with glow
  * - Guest mode: Large centered input (not fixed)
  * - Logged-in mode: Fixed bottom input
+ * - File upload support (images, PDF, DOCX, XLSX)
  */
 
 'use client';
 
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent, useCallback } from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useAuthStore } from '@/store/authStore';
 import { useTranslation } from '@/store/languageStore';
-import { useRouter } from 'next/navigation';
+import { useLocationStore } from '@/store/locationStore';
+import { FileUploadButton, FilePreview, PendingFile } from '@/components/chat';
+import { validateFile } from '@/lib/files';
+import { FileAttachment, FILE_LIMITS } from '@/types';
 
 interface ChatInputProps {
   isGuest?: boolean;
 }
 
 export default function ChatInput({ isGuest = false }: ChatInputProps) {
-  const router = useRouter();
   const [input, setInput] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { sendMessage, isLoading, isStreaming, sidebarOpen, cancelRequest, sessions, activeSessionId, clearMessages, createSession, canCreateNewSession } = useChatStore();
   const { user } = useAuthStore();
   const t = useTranslation();
+  const { latitude, longitude, permissionStatus, isLoading: locationLoading, requestLocation } = useLocationStore();
+  const hasLocation = latitude !== null && longitude !== null;
 
   // Handle new chat creation
   const handleNewChat = () => {
@@ -53,6 +60,128 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
     setShowClearConfirm(false);
   };
 
+  // File upload handlers
+  const handleFilesSelected = useCallback((files: File[]) => {
+    // Check if user is logged in (required for uploads)
+    if (!user) {
+      // Could show a toast here - for now just skip
+      return;
+    }
+
+    // Validate and add files
+    const newPendingFiles: PendingFile[] = [];
+    const currentCount = pendingFiles.length;
+
+    for (const file of files) {
+      // Check max files limit
+      if (currentCount + newPendingFiles.length >= FILE_LIMITS.maxFiles) {
+        break;
+      }
+
+      // Validate file
+      const validation = validateFile(file);
+      if (!validation.valid) {
+        // Add with error state
+        newPendingFiles.push({
+          id: crypto.randomUUID(),
+          file,
+          error: validation.error,
+        });
+        continue;
+      }
+
+      // Create preview for images
+      let preview: string | undefined;
+      if (file.type.startsWith('image/')) {
+        preview = URL.createObjectURL(file);
+      }
+
+      newPendingFiles.push({
+        id: crypto.randomUUID(),
+        file,
+        preview,
+      });
+    }
+
+    setPendingFiles((prev) => [...prev, ...newPendingFiles]);
+  }, [user, pendingFiles.length]);
+
+  const handleRemoveFile = useCallback((id: string) => {
+    setPendingFiles((prev) => {
+      const file = prev.find((f) => f.id === id);
+      // Revoke object URL to prevent memory leaks
+      if (file?.preview) {
+        URL.revokeObjectURL(file.preview);
+      }
+      return prev.filter((f) => f.id !== id);
+    });
+  }, []);
+
+  // Upload files and return attachments
+  const uploadFiles = async (): Promise<FileAttachment[]> => {
+    const filesToUpload = pendingFiles.filter((f) => !f.error);
+    if (filesToUpload.length === 0) return [];
+
+    setIsUploading(true);
+    const attachments: FileAttachment[] = [];
+
+    try {
+      // Mark all as uploading
+      setPendingFiles((prev) =>
+        prev.map((f) => (f.error ? f : { ...f, uploading: true }))
+      );
+
+      // Upload each file
+      for (const pendingFile of filesToUpload) {
+        try {
+          const formData = new FormData();
+          formData.append('file', pendingFile.file);
+
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+          });
+
+          const result = await response.json();
+
+          if (result.success && result.file) {
+            attachments.push(result.file);
+          } else {
+            // Mark file as errored
+            setPendingFiles((prev) =>
+              prev.map((f) =>
+                f.id === pendingFile.id
+                  ? { ...f, uploading: false, error: result.error || 'Upload failed' }
+                  : f
+              )
+            );
+          }
+        } catch {
+          setPendingFiles((prev) =>
+            prev.map((f) =>
+              f.id === pendingFile.id
+                ? { ...f, uploading: false, error: 'Upload failed' }
+                : f
+            )
+          );
+        }
+      }
+
+      return attachments;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      pendingFiles.forEach((f) => {
+        if (f.preview) URL.revokeObjectURL(f.preview);
+      });
+    };
+  }, []);
+
   // Check if guest has messages (to switch to fixed mode)
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const hasMessages = (activeSession?.messages?.length || 0) > 0;
@@ -61,7 +190,7 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
   const showGuestMode = !user && !hasMessages;
 
   // Determine if input should be disabled
-  const isDisabled = isLoading || isStreaming;
+  const isDisabled = isLoading || isStreaming || isUploading;
 
   // Auto-resize textarea based on content (responsive max height)
   useEffect(() => {
@@ -82,6 +211,28 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
       textareaRef.current.focus();
     }
   }, [isDisabled]);
+
+  // Listen for prompt suggestions from sidebar buttons
+  useEffect(() => {
+    const handleSuggestPrompt = (e: CustomEvent<{ prompt: string }>) => {
+      setInput(e.detail.prompt);
+      // Focus the textarea and move cursor to end
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(
+            e.detail.prompt.length,
+            e.detail.prompt.length
+          );
+        }
+      }, 100);
+    };
+
+    window.addEventListener('bakame:suggest-prompt', handleSuggestPrompt as EventListener);
+    return () => {
+      window.removeEventListener('bakame:suggest-prompt', handleSuggestPrompt as EventListener);
+    };
+  }, []);
 
   // Handle iOS virtual keyboard - adjust input position when keyboard appears
   useEffect(() => {
@@ -119,7 +270,10 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
 
   // Handle form submission
   const handleSubmit = async () => {
-    if (!input.trim() || isDisabled) return;
+    const hasText = input.trim().length > 0;
+    const hasValidFiles = pendingFiles.some((f) => !f.error);
+
+    if ((!hasText && !hasValidFiles) || isDisabled) return;
 
     const message = input.trim();
     setInput('');
@@ -129,7 +283,19 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
       textareaRef.current.style.height = 'auto';
     }
 
-    await sendMessage(message);
+    // Upload files first if any
+    let attachments: FileAttachment[] = [];
+    if (hasValidFiles) {
+      attachments = await uploadFiles();
+      // Clear pending files after upload
+      pendingFiles.forEach((f) => {
+        if (f.preview) URL.revokeObjectURL(f.preview);
+      });
+      setPendingFiles([]);
+    }
+
+    // Send message with attachments
+    await sendMessage(message, attachments);
   };
 
   // Handle keyboard shortcuts
@@ -176,7 +342,7 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
                 className="p-3 rounded-xl bg-green-600 hover:bg-green-700
                   text-white disabled:opacity-40 disabled:cursor-not-allowed
                   transition-colors duration-200"
-                aria-label="Ohereza"
+                aria-label={t.send}
               >
                 {isLoading ? (
                   <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -214,14 +380,14 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
               {showClearConfirm ? (
                 // Confirmation dialog
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 animate-fadeIn">
-                  <span className="text-xs text-red-600 dark:text-red-400">Siba ubutumwa bwose?</span>
+                  <span className="text-xs text-red-600 dark:text-red-400">{t.confirmClearChat}</span>
                   <button
                     onClick={confirmClear}
                     className="px-2.5 py-1 rounded-lg text-xs font-medium
                       bg-red-500 text-white hover:bg-red-600
                       transition-colors duration-200"
                   >
-                    Yego
+                    {t.yes}
                   </button>
                   <button
                     onClick={cancelClear}
@@ -230,7 +396,7 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
                       hover:bg-gray-300 dark:hover:bg-white/20
                       transition-colors duration-200"
                   >
-                    Oya
+                    {t.no}
                   </button>
                 </div>
               ) : (
@@ -251,6 +417,15 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
             </div>
           )}
 
+          {/* File preview area - above input */}
+          {pendingFiles.length > 0 && (
+            <FilePreview
+              files={pendingFiles}
+              onRemove={handleRemoveFile}
+              disabled={isDisabled}
+            />
+          )}
+
           {/* Premium input container with gradient border - matching guest style */}
           <div className={`relative p-[1px] rounded-2xl transition-all duration-200
             ${isFocused
@@ -261,21 +436,50 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
           <div
             className="relative flex items-end rounded-2xl bg-white dark:bg-[#0a0a0a]"
           >
-            {/* Upload Button - For later file uploads */}
+            {/* File Upload Button - only for logged-in users */}
             {user && (
-              <div className="p-2">
-                <button
-                  disabled={true}
-                  className="p-3 rounded-xl transition-all duration-200
-                    bg-gray-100 dark:bg-white/5 text-gray-400 dark:text-gray-500 cursor-not-allowed"
-                  title="Ohereza dosiye (Vuba)"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
+              <div className="p-2 pr-0">
+                <FileUploadButton
+                  onFilesSelected={handleFilesSelected}
+                  disabled={isDisabled}
+                  hasFiles={pendingFiles.length > 0}
+                />
               </div>
             )}
+
+            {/* Location Button */}
+            <div className="p-2">
+              <button
+                onClick={requestLocation}
+                disabled={locationLoading}
+                className={`p-3 rounded-xl transition-all duration-200 ${
+                  hasLocation
+                    ? 'bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400'
+                    : permissionStatus === 'denied'
+                    ? 'bg-red-100 dark:bg-red-500/20 text-red-500 dark:text-red-400'
+                    : 'bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-gray-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 hover:text-blue-600 dark:hover:text-blue-400'
+                }`}
+                title={
+                  hasLocation
+                    ? `Location shared (${latitude?.toFixed(4)}, ${longitude?.toFixed(4)})`
+                    : permissionStatus === 'denied'
+                    ? 'Location access denied'
+                    : 'Share your location for directions'
+                }
+              >
+                {locationLoading ? (
+                  <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                  </svg>
+                )}
+              </button>
+            </div>
 
             {/* Textarea */}
             <textarea
@@ -287,7 +491,7 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
               onBlur={() => setIsFocused(false)}
               placeholder={
                 isStreaming
-                  ? 'Tegereza...'
+                  ? t.pleaseWait
                   : t.placeholder
               }
               disabled={isDisabled}
@@ -305,7 +509,7 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
                     onClick={cancelRequest}
                     className="p-3 rounded-xl bg-red-600 hover:bg-red-700
                       text-white transition-colors duration-200"
-                    aria-label="Stop"
+                    aria-label={t.stop}
                   >
                     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                       <rect x="5" y="5" width="10" height="10" rx="2" />
@@ -314,13 +518,13 @@ export default function ChatInput({ isGuest = false }: ChatInputProps) {
                 ) : (
                   <button
                     onClick={handleSubmit}
-                    disabled={!input.trim() || isLoading}
+                    disabled={(!input.trim() && pendingFiles.filter(f => !f.error).length === 0) || isLoading || isUploading}
                     className="p-3 rounded-xl bg-green-600 hover:bg-green-700
                       text-white disabled:opacity-40 disabled:cursor-not-allowed
                       transition-colors duration-200"
-                    aria-label="Ohereza"
+                    aria-label={t.send}
                   >
-                    {isLoading ? (
+                    {isLoading || isUploading ? (
                       <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
