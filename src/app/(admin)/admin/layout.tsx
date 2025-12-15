@@ -18,6 +18,9 @@ export const metadata = {
   description: 'Bakame.ai Administration Dashboard',
 };
 
+// Force dynamic rendering for admin pages (requires auth cookies)
+export const dynamic = 'force-dynamic';
+
 export default async function AdminLayout({
   children,
 }: {

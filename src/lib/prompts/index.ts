@@ -33,3 +33,7 @@ export {
   getPromptStats,
   type PromptBuildOptions,
 } from './builder';
+
+// NOTE: Dynamic prompts (getDynamicSystemPrompt, getDynamicPrompt, invalidatePromptCache)
+// are SERVER-ONLY and must be imported directly from '@/lib/prompts/dynamic'
+// They use next/headers and cannot be included in this barrel export.

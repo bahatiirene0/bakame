@@ -27,6 +27,9 @@ export const viewport: Viewport = {
   ],
 };
 
+// Force dynamic rendering (app requires auth cookies)
+export const dynamic = 'force-dynamic';
+
 export default async function RootLayout({
   children,
 }: Readonly<{

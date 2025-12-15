@@ -526,3 +526,604 @@ export async function getSystemHealth() {
     timestamp: new Date().toISOString(),
   };
 }
+
+// ============================================
+// System Prompts Management
+// ============================================
+
+export async function getSystemPrompts() {
+  const { supabase } = await verifyAdmin();
+
+  const { data, error } = await supabase
+    .from('admin_settings')
+    .select('*')
+    .eq('category', 'prompts')
+    .order('key');
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateSystemPrompt(
+  key: string,
+  promptData: { value: string; isActive: boolean }
+) {
+  const { supabase, userId } = await verifyAdmin();
+
+  // Check if prompt exists
+  const { data: existing } = await supabase
+    .from('admin_settings')
+    .select('id, value')
+    .eq('key', key)
+    .single();
+
+  // Store previous version in history (via audit log)
+  if (existing) {
+    await logAdminAction(supabase, userId, 'update_prompt', 'prompt', key, {
+      previous_value: existing.value,
+      new_value: promptData,
+    });
+  }
+
+  if (existing) {
+    // Update existing
+    const { data, error } = await supabase
+      .from('admin_settings')
+      .update({
+        value: promptData as unknown as Json,
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('key', key)
+      .select()
+      .single();
+
+    if (error) throw error;
+    revalidatePath('/admin/prompts');
+    return data;
+  } else {
+    // Insert new
+    const { data, error } = await supabase
+      .from('admin_settings')
+      .insert({
+        key,
+        value: promptData as unknown as Json,
+        category: 'prompts',
+        description: `System prompt: ${key}`,
+        updated_by: userId,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    revalidatePath('/admin/prompts');
+    return data;
+  }
+}
+
+export async function getPromptHistory(key: string) {
+  const { supabase } = await verifyAdmin();
+
+  // Get history from audit logs
+  const { data, error } = await supabase
+    .from('admin_audit_logs')
+    .select('id, details, created_at, admin_id')
+    .eq('action', 'update_prompt')
+    .eq('target_id', key)
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+
+  // Transform to history format
+  return (data || []).map((log: { id: string; details: unknown; created_at: string; admin_id: string }) => ({
+    id: log.id,
+    value: (log.details as { previous_value?: { value?: string } })?.previous_value?.value || '',
+    updated_by: log.admin_id,
+    updated_at: log.created_at,
+  }));
+}
+
+// ============================================
+// Get Active System Prompt (for Chat API)
+// ============================================
+
+export async function getActiveSystemPrompt(): Promise<string | null> {
+  // This function can be called without admin auth
+  const supabase = await createServerSupabaseClient() as AnySupabase;
+
+  const { data, error } = await supabase
+    .from('admin_settings')
+    .select('value')
+    .eq('key', 'system_prompt_main')
+    .eq('category', 'prompts')
+    .single();
+
+  if (error || !data) return null;
+
+  const promptData = data.value as { value?: string; isActive?: boolean };
+  if (!promptData.isActive) return null;
+
+  return promptData.value || null;
+}
+
+// ============================================
+// Knowledge Base Management
+// ============================================
+
+export interface KnowledgeDocument {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  language: string;
+  source: string | null;
+  priority: number;
+  status: 'pending' | 'processing' | 'ready' | 'error';
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  metadata: Record<string, unknown> | null;
+  chunk_count?: number;
+}
+
+export interface KnowledgeQA {
+  id: string;
+  document_id: string | null;
+  question: string;
+  answer: string;
+  category: string;
+  language: string;
+  source: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+/**
+ * Get all knowledge documents with pagination
+ */
+export async function getKnowledgeDocuments(options?: {
+  page?: number;
+  pageSize?: number;
+  category?: string;
+  status?: string;
+  search?: string;
+}) {
+  const { supabase } = await verifyAdmin();
+  const { page = 1, pageSize = 20, category, status, search } = options || {};
+
+  let query = supabase
+    .from('knowledge_documents')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  if (category) query = query.eq('category', category);
+  if (status) query = query.eq('status', status);
+  if (search) query = query.ilike('title', `%${search}%`);
+
+  const { data, count, error } = await query;
+
+  if (error) throw error;
+
+  // Get chunk counts for each document
+  const documentsWithChunks = await Promise.all(
+    (data || []).map(async (doc: KnowledgeDocument) => {
+      const { count: chunkCount } = await supabase
+        .from('knowledge_chunks')
+        .select('id', { count: 'exact', head: true })
+        .eq('document_id', doc.id);
+
+      return { ...doc, chunk_count: chunkCount || 0 };
+    })
+  );
+
+  return {
+    documents: documentsWithChunks,
+    total: count || 0,
+    page,
+    pageSize,
+    totalPages: Math.ceil((count || 0) / pageSize),
+  };
+}
+
+/**
+ * Get knowledge base statistics
+ */
+export async function getKnowledgeStats() {
+  const { supabase } = await verifyAdmin();
+
+  const [
+    documentsResult,
+    chunksResult,
+    qaResult,
+    categoriesResult,
+  ] = await Promise.all([
+    supabase.from('knowledge_documents').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_chunks').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_qa').select('id', { count: 'exact', head: true }),
+    supabase.from('knowledge_documents').select('category').eq('is_active', true),
+  ]);
+
+  // Count unique categories
+  const categories = new Set((categoriesResult.data || []).map((d: { category: string }) => d.category));
+
+  return {
+    totalDocuments: documentsResult.count || 0,
+    totalChunks: chunksResult.count || 0,
+    totalQA: qaResult.count || 0,
+    totalCategories: categories.size,
+  };
+}
+
+/**
+ * Create a new knowledge document
+ */
+export async function createKnowledgeDocument(document: {
+  title: string;
+  content: string;
+  category: string;
+  language?: string;
+  source?: string;
+  priority?: number;
+}) {
+  const { supabase, userId } = await verifyAdmin();
+
+  const { data, error } = await supabase
+    .from('knowledge_documents')
+    .insert({
+      title: document.title,
+      content: document.content,
+      category: document.category,
+      language: document.language || 'en',
+      source: document.source || null,
+      priority: document.priority || 1,
+      status: 'pending',
+      is_active: false,
+      metadata: { created_by: userId },
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'create_knowledge_document', 'knowledge', data.id, {
+    title: document.title,
+    category: document.category,
+  });
+
+  revalidatePath('/admin/knowledge');
+  return data;
+}
+
+/**
+ * Update a knowledge document
+ */
+export async function updateKnowledgeDocument(
+  documentId: string,
+  updates: Partial<{
+    title: string;
+    content: string;
+    category: string;
+    language: string;
+    source: string | null;
+    priority: number;
+    is_active: boolean;
+    status: string;
+  }>
+) {
+  const { supabase, userId } = await verifyAdmin();
+
+  // If content is updated, set status back to pending for re-processing
+  if (updates.content) {
+    updates.status = 'pending';
+  }
+
+  const { data, error } = await supabase
+    .from('knowledge_documents')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', documentId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'update_knowledge_document', 'knowledge', documentId, {
+    updates: Object.keys(updates),
+  });
+
+  revalidatePath('/admin/knowledge');
+  return data;
+}
+
+/**
+ * Delete a knowledge document
+ */
+export async function deleteKnowledgeDocument(documentId: string) {
+  const { supabase, userId } = await verifyAdmin();
+
+  // Get document info for logging
+  const { data: doc } = await supabase
+    .from('knowledge_documents')
+    .select('title')
+    .eq('id', documentId)
+    .single();
+
+  // Delete document (chunks will cascade)
+  const { error } = await supabase
+    .from('knowledge_documents')
+    .delete()
+    .eq('id', documentId);
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'delete_knowledge_document', 'knowledge', documentId, {
+    title: doc?.title,
+  });
+
+  revalidatePath('/admin/knowledge');
+  return { success: true };
+}
+
+/**
+ * Process a knowledge document (generate embeddings)
+ */
+export async function processKnowledgeDocument(documentId: string) {
+  const { supabase, userId } = await verifyAdmin();
+
+  // Call the processing API
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+  try {
+    const response = await fetch(`${baseUrl}/api/admin/knowledge/process`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ documentId }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Processing failed');
+    }
+
+    await logAdminAction(supabase, userId, 'process_knowledge_document', 'knowledge', documentId, {
+      chunksCreated: result.chunksCreated,
+      tokensUsed: result.tokensUsed,
+    });
+
+    revalidatePath('/admin/knowledge');
+    return {
+      success: true,
+      message: `Document processed: ${result.chunksCreated} chunks created`,
+      ...result,
+    };
+  } catch (error) {
+    // If API call fails, just set status to processing (background job will handle it)
+    await supabase
+      .from('knowledge_documents')
+      .update({ status: 'processing' })
+      .eq('id', documentId);
+
+    await logAdminAction(supabase, userId, 'process_knowledge_document', 'knowledge', documentId);
+
+    revalidatePath('/admin/knowledge');
+    return { success: true, message: 'Document queued for processing' };
+  }
+}
+
+/**
+ * Get Q&A pairs with pagination
+ */
+export async function getKnowledgeQA(options?: {
+  page?: number;
+  pageSize?: number;
+  category?: string;
+  search?: string;
+}) {
+  const { supabase } = await verifyAdmin();
+  const { page = 1, pageSize = 20, category, search } = options || {};
+
+  let query = supabase
+    .from('knowledge_qa')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  if (category) query = query.eq('category', category);
+  if (search) query = query.or(`question.ilike.%${search}%,answer.ilike.%${search}%`);
+
+  const { data, count, error } = await query;
+
+  if (error) throw error;
+
+  return {
+    qa: data || [],
+    total: count || 0,
+    page,
+    pageSize,
+    totalPages: Math.ceil((count || 0) / pageSize),
+  };
+}
+
+/**
+ * Create a Q&A pair
+ */
+export async function createKnowledgeQA(qa: {
+  question: string;
+  answer: string;
+  category: string;
+  language?: string;
+  source?: string;
+}) {
+  const { supabase, userId } = await verifyAdmin();
+
+  const { data, error } = await supabase
+    .from('knowledge_qa')
+    .insert({
+      question: qa.question,
+      answer: qa.answer,
+      category: qa.category,
+      language: qa.language || 'en',
+      source: qa.source || null,
+      is_active: true,
+      metadata: { created_by: userId },
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'create_knowledge_qa', 'knowledge_qa', data.id);
+
+  revalidatePath('/admin/knowledge');
+  return data;
+}
+
+/**
+ * Delete a Q&A pair
+ */
+export async function deleteKnowledgeQA(qaId: string) {
+  const { supabase, userId } = await verifyAdmin();
+
+  const { error } = await supabase
+    .from('knowledge_qa')
+    .delete()
+    .eq('id', qaId);
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'delete_knowledge_qa', 'knowledge_qa', qaId);
+
+  revalidatePath('/admin/knowledge');
+  return { success: true };
+}
+
+/**
+ * Get knowledge categories
+ */
+export async function getKnowledgeCategories() {
+  const { supabase } = await verifyAdmin();
+
+  const { data: docs } = await supabase
+    .from('knowledge_documents')
+    .select('category');
+
+  const { data: qa } = await supabase
+    .from('knowledge_qa')
+    .select('category');
+
+  // Combine and count
+  const categories: Record<string, { documents: number; qa: number }> = {};
+
+  (docs || []).forEach((d: { category: string }) => {
+    if (!categories[d.category]) {
+      categories[d.category] = { documents: 0, qa: 0 };
+    }
+    categories[d.category].documents++;
+  });
+
+  (qa || []).forEach((q: { category: string }) => {
+    if (!categories[q.category]) {
+      categories[q.category] = { documents: 0, qa: 0 };
+    }
+    categories[q.category].qa++;
+  });
+
+  return Object.entries(categories).map(([name, counts]) => ({
+    name,
+    ...counts,
+    total: counts.documents + counts.qa,
+  }));
+}
+
+// ============================================
+// User Memories Management
+// ============================================
+
+/**
+ * Get user memories (admin view)
+ */
+export async function getUserMemories(options?: {
+  page?: number;
+  pageSize?: number;
+  userId?: string;
+  memoryType?: string;
+}) {
+  const { supabase } = await verifyAdmin();
+  const { page = 1, pageSize = 20, userId, memoryType } = options || {};
+
+  let query = supabase
+    .from('user_memories')
+    .select('*, users(name, email)', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  if (userId) query = query.eq('user_id', userId);
+  if (memoryType) query = query.eq('memory_type', memoryType);
+
+  const { data, count, error } = await query;
+
+  if (error) throw error;
+
+  return {
+    memories: data || [],
+    total: count || 0,
+    page,
+    pageSize,
+    totalPages: Math.ceil((count || 0) / pageSize),
+  };
+}
+
+/**
+ * Get memory statistics
+ */
+export async function getMemoryStats() {
+  const { supabase } = await verifyAdmin();
+
+  const [
+    totalResult,
+    usersWithMemoriesResult,
+    byTypeResult,
+  ] = await Promise.all([
+    supabase.from('user_memories').select('id', { count: 'exact', head: true }),
+    supabase.from('user_memories').select('user_id'),
+    supabase.from('user_memories').select('memory_type'),
+  ]);
+
+  // Count unique users
+  const uniqueUsers = new Set((usersWithMemoriesResult.data || []).map((m: { user_id: string }) => m.user_id));
+
+  // Count by type
+  const byType: Record<string, number> = {};
+  (byTypeResult.data || []).forEach((m: { memory_type: string }) => {
+    byType[m.memory_type] = (byType[m.memory_type] || 0) + 1;
+  });
+
+  return {
+    totalMemories: totalResult.count || 0,
+    usersWithMemories: uniqueUsers.size,
+    byType,
+  };
+}
+
+/**
+ * Delete a user memory (admin action)
+ */
+export async function deleteUserMemory(memoryId: string) {
+  const { supabase, userId } = await verifyAdmin();
+
+  const { error } = await supabase
+    .from('user_memories')
+    .delete()
+    .eq('id', memoryId);
+
+  if (error) throw error;
+
+  await logAdminAction(supabase, userId, 'delete_user_memory', 'memory', memoryId);
+
+  revalidatePath('/admin/memories');
+  return { success: true };
+}

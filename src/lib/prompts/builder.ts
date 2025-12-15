@@ -2,7 +2,7 @@
  * Prompt Builder
  *
  * Assembles the final system prompt from:
- * 1. Base prompt (Bakame identity)
+ * 1. Base prompt (Bakame identity) - can be overridden by admin dashboard
  * 2. User context (personalization)
  *
  * NOTE: Specialist prompts are deprecated - domain expertise
@@ -24,6 +24,8 @@ export interface PromptBuildOptions {
   userLocation?: { latitude: number; longitude: number } | null;
   /** User's UI language preference - AI should respond in this language */
   uiLanguage?: Language;
+  /** Override base prompt with custom one from admin dashboard */
+  customBasePrompt?: string | null;
 }
 
 /**
@@ -48,10 +50,16 @@ export function buildSystemPrompt(options: PromptBuildOptions = {}): string {
     return LEGACY_PROMPT;
   }
 
-  const { specialistId = 'default', userSettings = null, userLocation = null, uiLanguage = 'rw' } = options;
+  const {
+    specialistId = 'default',
+    userSettings = null,
+    userLocation = null,
+    uiLanguage = 'rw',
+    customBasePrompt = null,
+  } = options;
 
-  // Start with base prompt
-  let prompt = BASE_PROMPT;
+  // Start with base prompt - use custom from admin if available
+  let prompt = customBasePrompt || BASE_PROMPT;
 
   // Add specialist context if not default
   const specialistPrompt = getSpecialistPrompt(specialistId);

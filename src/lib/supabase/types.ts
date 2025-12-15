@@ -430,3 +430,191 @@ export type AdminSettingUpdate = Database['public']['Tables']['admin_settings'][
 
 // View types
 export type AdminDashboardStats = Database['public']['Views']['admin_dashboard_stats']['Row'];
+
+// ============================================
+// RAG & MEMORY TYPES
+// ============================================
+
+// Knowledge document status
+export type KnowledgeDocumentStatus = 'pending' | 'processing' | 'ready' | 'error';
+
+// Memory types
+export type MemoryType = 'fact' | 'preference' | 'context' | 'goal';
+export type MemorySource = 'extracted' | 'user_stated' | 'inferred';
+
+// Knowledge Documents
+export interface KnowledgeDocument {
+  id: string;
+  title: string;
+  description: string | null;
+  source: string | null;
+  source_url: string | null;
+  original_content: string | null;
+  category: string;
+  subcategory: string | null;
+  tags: string[];
+  language: string;
+  status: KnowledgeDocumentStatus;
+  priority: number;
+  is_active: boolean;
+  metadata: Json | null;
+  chunk_count: number;
+  total_tokens: number;
+  file_path: string | null;
+  file_type: string | null;
+  file_size: number | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  processed_at: string | null;
+}
+
+export interface KnowledgeDocumentInsert {
+  id?: string;
+  title: string;
+  description?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  original_content?: string | null;
+  category?: string;
+  subcategory?: string | null;
+  tags?: string[];
+  language?: string;
+  status?: KnowledgeDocumentStatus;
+  priority?: number;
+  is_active?: boolean;
+  metadata?: Json | null;
+  file_path?: string | null;
+  file_type?: string | null;
+  file_size?: number | null;
+  created_by?: string | null;
+}
+
+// Knowledge Chunks
+export interface KnowledgeChunk {
+  id: string;
+  document_id: string;
+  chunk_index: number;
+  content: string;
+  embedding: number[] | null;
+  metadata: Json | null;
+  token_count: number | null;
+  content_hash: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeChunkInsert {
+  id?: string;
+  document_id: string;
+  chunk_index: number;
+  content: string;
+  embedding?: number[] | null;
+  metadata?: Json | null;
+  token_count?: number | null;
+  content_hash?: string | null;
+}
+
+// Knowledge QA
+export interface KnowledgeQA {
+  id: string;
+  question: string;
+  question_variants: string[];
+  answer: string;
+  embedding: number[] | null;
+  category: string;
+  tags: string[];
+  language: string;
+  source: string | null;
+  source_url: string | null;
+  priority: number;
+  is_active: boolean;
+  metadata: Json | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeQAInsert {
+  id?: string;
+  question: string;
+  question_variants?: string[];
+  answer: string;
+  embedding?: number[] | null;
+  category?: string;
+  tags?: string[];
+  language?: string;
+  source?: string | null;
+  source_url?: string | null;
+  priority?: number;
+  is_active?: boolean;
+  metadata?: Json | null;
+  created_by?: string | null;
+}
+
+// User Memories
+export interface UserMemory {
+  id: string;
+  user_id: string;
+  content: string;
+  memory_type: MemoryType;
+  category: string | null;
+  embedding: number[] | null;
+  confidence: number;
+  source: MemorySource;
+  source_session_id: string | null;
+  importance: number;
+  access_count: number;
+  last_accessed_at: string | null;
+  strength: number;
+  is_active: boolean;
+  is_validated: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserMemoryInsert {
+  id?: string;
+  user_id: string;
+  content: string;
+  memory_type?: MemoryType;
+  category?: string | null;
+  embedding?: number[] | null;
+  confidence?: number;
+  source?: MemorySource;
+  source_session_id?: string | null;
+  importance?: number;
+  is_validated?: boolean;
+}
+
+// Search result types
+export interface KnowledgeSearchResult {
+  id: string;
+  document_id: string;
+  content: string;
+  similarity: number;
+  category: string;
+  document_title: string;
+  source: string | null;
+  metadata: Json | null;
+}
+
+export interface KnowledgeQASearchResult {
+  id: string;
+  question: string;
+  answer: string;
+  similarity: number;
+  category: string;
+  source: string | null;
+  priority: number;
+}
+
+export interface UserMemorySearchResult {
+  id: string;
+  content: string;
+  memory_type: MemoryType;
+  category: string | null;
+  similarity: number;
+  confidence: number;
+  importance: number;
+  strength: number;
+}

@@ -52,7 +52,7 @@ const stats: CacheStats = {
  * // Returns: "cache:tool:weather:a1b2c3d4..."
  * ```
  */
-export function generateCacheKey(toolName: string, args: unknown = {}): string {
+export function generateCacheKey(toolName: string, args: Record<string, unknown> = {}): string {
   // Serialize arguments in a deterministic way
   const argsString = JSON.stringify(args, Object.keys(args).sort());
 

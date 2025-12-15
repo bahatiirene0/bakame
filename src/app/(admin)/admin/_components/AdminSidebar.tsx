@@ -23,6 +23,9 @@ import {
   X,
   CreditCard,
   Shield,
+  Sparkles,
+  BookOpen,
+  Brain,
 } from 'lucide-react';
 
 // Navigation configuration - easy to extend
@@ -38,6 +41,9 @@ const NAV_ITEMS = [
     items: [
       { href: '/admin/users', label: 'Users', icon: Users },
       { href: '/admin/subscriptions', label: 'Subscriptions', icon: CreditCard },
+      { href: '/admin/prompts', label: 'AI Prompts', icon: Sparkles },
+      { href: '/admin/knowledge', label: 'Knowledge Base', icon: BookOpen },
+      { href: '/admin/memories', label: 'User Memories', icon: Brain },
     ],
   },
   {

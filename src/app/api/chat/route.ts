@@ -34,6 +34,7 @@ import { ChatCompletionMessageParam, ChatCompletionContentPart } from 'openai/re
 import { randomUUID } from 'crypto';
 import { BAKAME_TOOLS, executeTool } from '@/lib/tools';
 import { buildSystemPrompt, SpecialistType, UserAISettings } from '@/lib/prompts';
+import { getDynamicSystemPrompt } from '@/lib/prompts/dynamic';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { Language } from '@/store/languageStore';
 import { checkRateLimit } from '@/lib/redis';
@@ -41,6 +42,9 @@ import { logger } from '@/lib/logger';
 import { captureException, addBreadcrumb, setUser } from '@/lib/sentry';
 import { env, hasOpenRouter, isDevelopment } from '@/lib/env';
 import { FileAttachment } from '@/types';
+// RAG and Memory imports
+import { retrieveKnowledge, formatForSystemPrompt } from '@/lib/rag';
+import { getMemoryContext, extractMemories, storeMemories } from '@/lib/memory';
 
 // Determine which provider to use (OpenRouter or OpenAI direct)
 const useOpenRouter = hasOpenRouter;
@@ -202,19 +206,97 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Fetch custom prompt from admin dashboard (if configured)
+    const customBasePrompt = await getDynamicSystemPrompt();
+
     // Build dynamic system prompt
-    const systemPrompt = buildSystemPrompt({
+    let systemPrompt = buildSystemPrompt({
       specialistId,
       userSettings,
       userLocation,
       uiLanguage,
+      customBasePrompt, // Use admin-configured prompt if available
     });
+
+    // Get the last user message for context
+    const lastUserMessage = messages.filter((m: { role: string }) => m.role === 'user').pop();
+    const userQuery = lastUserMessage?.content || '';
+
+    // ===== RAG KNOWLEDGE RETRIEVAL =====
+    // Retrieve relevant knowledge from our knowledge base
+    // This takes PRIORITY over LLM's base knowledge
+    let ragContext = '';
+    let shouldSuggestWebSearch = false;
+
+    try {
+      const ragResult = await retrieveKnowledge(userQuery, {
+        userLanguage: uiLanguage === 'rw' ? 'rw' : 'en',
+        maxContextTokens: 2000,
+        includeSources: true,
+      });
+
+      if (ragResult.hasKnowledge) {
+        ragContext = formatForSystemPrompt(ragResult, uiLanguage === 'rw' ? 'rw' : 'en');
+        reqLogger.info('RAG knowledge retrieved', {
+          confidence: ragResult.confidence,
+          sourceCount: ragResult.sources.length,
+          fromCache: ragResult.raw.fromCache,
+        });
+      } else if (ragResult.fallbackSuggestion === 'web_search') {
+        // Knowledge not found - consider enabling web search
+        shouldSuggestWebSearch = true;
+        reqLogger.debug('RAG suggests web search fallback');
+      }
+    } catch (error) {
+      reqLogger.warn('RAG retrieval failed, continuing without knowledge context', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // ===== USER MEMORY RETRIEVAL =====
+    // Retrieve personalized context from user's memory (authenticated users only)
+    let memoryContext = '';
+
+    if (user?.id) {
+      try {
+        const memoryResult = await getMemoryContext(
+          user.id,
+          userQuery,
+          uiLanguage === 'rw' ? 'rw' : 'en'
+        );
+
+        if (memoryResult.hasMemories) {
+          memoryContext = memoryResult.context;
+          reqLogger.info('User memory context retrieved', {
+            memoryCount: memoryResult.count,
+          });
+        }
+      } catch (error) {
+        reqLogger.warn('Memory retrieval failed, continuing without memory context', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // ===== AUGMENT SYSTEM PROMPT =====
+    // Add RAG knowledge and Memory context to system prompt
+    // RAG knowledge is highest priority, then user memory
+    if (ragContext) {
+      systemPrompt += '\n\n' + ragContext;
+    }
+    if (memoryContext) {
+      systemPrompt += '\n\n' + memoryContext;
+    }
 
     reqLogger.debug('System prompt built', {
       specialistId,
       hasUserSettings: !!userSettings,
       hasUserLocation: !!userLocation,
       uiLanguage,
+      usingCustomPrompt: !!customBasePrompt,
+      hasRagContext: !!ragContext,
+      hasMemoryContext: !!memoryContext,
+      suggestWebSearch: shouldSuggestWebSearch,
     });
 
     /**
@@ -536,6 +618,47 @@ export async function POST(request: NextRequest) {
           reqLogger.info('Stream completed successfully');
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           controller.close();
+
+          // ===== BACKGROUND MEMORY EXTRACTION =====
+          // Extract memories from this conversation (non-blocking)
+          // Only for authenticated users
+          // Extract memories from conversation (uses OpenRouter for embeddings now)
+          if (user?.id && userQuery) {
+            // Run in background - don't await
+            (async () => {
+              try {
+                const userMessages = messages
+                  .filter((m: { role: string }) => m.role === 'user')
+                  .map((m: { content: string }) => m.content);
+                const assistantMessages = messages
+                  .filter((m: { role: string }) => m.role === 'assistant')
+                  .map((m: { content: string }) => m.content);
+
+                // Only extract if we have enough conversation context
+                if (userMessages.length > 0) {
+                  const extractionResult = await extractMemories(
+                    userMessages,
+                    assistantMessages
+                  );
+
+                  if (extractionResult.success && extractionResult.memories.length > 0) {
+                    const storedIds = await storeMemories(user.id, extractionResult.memories);
+                    if (storedIds.length > 0) {
+                      reqLogger.info('Memories extracted and stored', {
+                        userId: user.id,
+                        extractedCount: extractionResult.memories.length,
+                        storedCount: storedIds.length,
+                      });
+                    }
+                  }
+                }
+              } catch (memError) {
+                reqLogger.warn('Background memory extraction failed', {
+                  error: memError instanceof Error ? memError.message : String(memError),
+                });
+              }
+            })();
+          }
         } catch (error) {
           reqLogger.error('Stream error', {
             error: error instanceof Error ? error.message : String(error),

@@ -37,6 +37,8 @@ export interface SentryContext {
   extra?: Record<string, unknown>;
   level?: SentryLevel;
   fingerprint?: string[];
+  // Allow additional properties for tool-specific context
+  [key: string]: unknown;
 }
 
 // ===========================================
@@ -177,3 +179,6 @@ export function withScope(callback: (scope: Sentry.Scope) => void): void {
 export function isSentryAvailable(): boolean {
   return sentryEnabled;
 }
+
+/** Alias for isSentryAvailable for backwards compatibility */
+export const isSentryEnabled = isSentryAvailable;

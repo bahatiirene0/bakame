@@ -695,7 +695,7 @@ async function getNews(args: ToolArgs): Promise<ToolResult> {
 
   try {
     // Use caching with 15 minute TTL
-    const newsData = await cacheNews(topic, country, async () => {
+    const newsData = await cacheNews<{ articles?: Array<{ title: string; description: string; url: string; source: { name: string }; publishedAt: string }> }>(`${topic}-${country || 'global'}`, async () => {
       logger.debug(`Fetching news for topic: ${topic}, country: ${country}`);
       // Use top-headlines for country-specific or everything for topic search
       let url: string;
@@ -731,7 +731,7 @@ async function getNews(args: ToolArgs): Promise<ToolResult> {
       data: {
         topic,
         country,
-        articles: newsData.articles?.slice(0, numArticles).map((a: { title: string; description: string; url: string; source: { name: string }; publishedAt: string }) => ({
+        articles: newsData.articles?.slice(0, numArticles).map((a) => ({
           title: a.title,
           description: a.description,
           url: a.url,

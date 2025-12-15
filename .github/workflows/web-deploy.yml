@@ -1,0 +1,86 @@
+# GitHub Actions - Web App CI/CD
+#
+# WORKFLOW:
+# - Push to any branch → Preview deployment (test URL)
+# - Push to main → Production deployment (bakame.rw)
+# - Pull Request → Preview + Tests (no prod deploy)
+
+name: Web App CI/CD
+
+on:
+  push:
+    branches: ['*']  # All branches get preview deployments
+    paths-ignore:
+      - 'mobile/**'
+      - '*.md'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'mobile/**'
+      - '*.md'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # Job 1: Quick Checks (runs on ALL pushes)
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+
+  # Job 2: Preview Deployment (branches other than main)
+  preview:
+    name: Preview Deploy
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref != 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Preview to Vercel
+        uses: amondnet/vercel-action@v25
+        id: vercel-preview
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          # No --prod flag = preview deployment
+
+      - name: Comment Preview URL
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🚀 **Preview deployed!**\n\nURL: ${{ steps.vercel-preview.outputs.preview-url }}\n\nThis preview will update with each push to this branch.'
+            })
+
+  # Job 3: Production Deployment (only main branch)
+  production:
+    name: Production Deploy
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Production
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'  # Production deployment
