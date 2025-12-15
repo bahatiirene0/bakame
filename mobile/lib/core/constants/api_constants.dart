@@ -11,10 +11,10 @@ class ApiConstants {
 
   /// Base URL for API calls
   /// Override with: --dart-define=API_URL=https://your-domain.com
-  /// Defaults to production URL
+  /// Defaults to Vercel deployment URL
   static const String baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://bakame.ai',
+    defaultValue: 'https://bakame-ai-virid.vercel.app',
   );
 
   /// Environment name (development, staging, production)

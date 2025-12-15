@@ -4,11 +4,44 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/presentation/auth_provider.dart';
 import 'chat_provider.dart';
+import 'widgets/app_drawer.dart';
 import 'widgets/chat_bubble.dart';
 import 'widgets/chat_input.dart';
+
+/// Theme mode provider with persistence
+final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+  return ThemeModeNotifier();
+});
+
+class ThemeModeNotifier extends StateNotifier<ThemeMode> {
+  ThemeModeNotifier() : super(ThemeMode.system) {
+    _loadTheme();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final themeIndex = prefs.getInt('theme_mode') ?? 0;
+    state = ThemeMode.values[themeIndex];
+  }
+
+  Future<void> setTheme(ThemeMode mode) async {
+    state = mode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('theme_mode', mode.index);
+  }
+
+  void toggleTheme() {
+    if (state == ThemeMode.dark) {
+      setTheme(ThemeMode.light);
+    } else {
+      setTheme(ThemeMode.dark);
+    }
+  }
+}
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -54,6 +87,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       appBar: _buildAppBar(context, isDark, user),
+      drawer: AppDrawer(
+        onNewChat: () => ref.read(chatProvider.notifier).clearMessages(),
+        onSettings: () => _showSettings(context, ref, isDark),
+      ),
       body: Column(
         children: [
           // Messages list
@@ -115,9 +152,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         // Theme toggle
         IconButton(
           icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-          onPressed: () {
-            // TODO: Implement theme toggle
-          },
+          onPressed: () => ref.read(themeModeProvider.notifier).toggleTheme(),
           tooltip: 'Toggle Theme',
         ),
       ],
@@ -265,6 +300,158 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             constraints: const BoxConstraints(),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSettings(BuildContext context, WidgetRef ref, bool isDark) {
+    final themeMode = ref.read(themeModeProvider);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Consumer(
+        builder: (context, ref, _) {
+          final currentTheme = ref.watch(themeModeProvider);
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  Text(
+                    'Settings',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Theme selection
+                  Text(
+                    'Theme',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+
+                  Row(
+                    children: [
+                      _buildThemeOption(
+                        context,
+                        ref,
+                        isDark,
+                        'System',
+                        Icons.settings_suggest,
+                        ThemeMode.system,
+                        currentTheme,
+                      ),
+                      const SizedBox(width: 12),
+                      _buildThemeOption(
+                        context,
+                        ref,
+                        isDark,
+                        'Light',
+                        Icons.light_mode,
+                        ThemeMode.light,
+                        currentTheme,
+                      ),
+                      const SizedBox(width: 12),
+                      _buildThemeOption(
+                        context,
+                        ref,
+                        isDark,
+                        'Dark',
+                        Icons.dark_mode,
+                        ThemeMode.dark,
+                        currentTheme,
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(
+    BuildContext context,
+    WidgetRef ref,
+    bool isDark,
+    String label,
+    IconData icon,
+    ThemeMode mode,
+    ThemeMode currentMode,
+  ) {
+    final isSelected = currentMode == mode;
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => ref.read(themeModeProvider.notifier).setTheme(mode),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppColors.primaryGreen.withOpacity(0.1)
+                : isDark
+                    ? AppColors.darkBackgroundSecondary
+                    : AppColors.lightBackgroundSecondary,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.primaryGreen
+                  : isDark
+                      ? AppColors.darkBorder
+                      : AppColors.lightBorder,
+              width: isSelected ? 2 : 1,
+            ),
+          ),
+          child: Column(
+            children: [
+              Icon(
+                icon,
+                color: isSelected
+                    ? AppColors.primaryGreen
+                    : isDark
+                        ? AppColors.darkForegroundSecondary
+                        : AppColors.lightForegroundSecondary,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: isSelected
+                      ? AppColors.primaryGreen
+                      : isDark
+                          ? AppColors.darkForegroundSecondary
+                          : AppColors.lightForegroundSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -14,6 +14,9 @@ import 'features/auth/presentation/auth_provider.dart';
 import 'features/auth/presentation/login_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 
+// Re-export themeModeProvider for use in MaterialApp
+export 'features/chat/presentation/chat_screen.dart' show themeModeProvider;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -53,6 +56,8 @@ class BakameApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final themeMode = ref.watch(themeModeProvider);
+
     return MaterialApp(
       title: 'Bakame AI',
       debugShowCheckedModeBanner: false,
@@ -60,7 +65,7 @@ class BakameApp extends ConsumerWidget {
       // Theme
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
+      themeMode: themeMode,
 
       // Routes
       initialRoute: '/',

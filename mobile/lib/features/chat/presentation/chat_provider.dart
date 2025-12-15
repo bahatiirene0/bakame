@@ -1,17 +1,24 @@
 /// Chat Provider using Riverpod
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/services/connectivity_service.dart';
 import '../../../core/services/sse_client.dart';
 import '../../auth/presentation/auth_provider.dart';
 import '../domain/message.dart';
 
-// SSE Client provider
+// SSE Client provider - recreates when auth state changes
 final sseClientProvider = Provider<SSEChatClient>((ref) {
   final authService = ref.watch(authServiceProvider);
+  final accessToken = authService.currentSession?.accessToken;
+
+  // Debug logging
+  debugPrint('SSE Client created - hasToken: ${accessToken != null}');
+
   return SSEChatClient(
-    authToken: authService.currentSession?.accessToken,
+    authToken: accessToken,
   );
 });
 
@@ -51,13 +58,23 @@ class ChatState {
 // Chat notifier
 class ChatNotifier extends StateNotifier<ChatState> {
   final SSEChatClient _client;
+  final ConnectivityService _connectivity;
   final Uuid _uuid = const Uuid();
 
-  ChatNotifier(this._client) : super(ChatState());
+  ChatNotifier(this._client, this._connectivity) : super(ChatState());
 
   /// Send a message and get streaming response
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
+
+    // Check connectivity first
+    final networkStatus = await _connectivity.checkConnectivity();
+    if (networkStatus == NetworkStatus.offline) {
+      state = state.copyWith(
+        error: 'No internet connection. Please check your network and try again.',
+      );
+      return;
+    }
 
     // Add user message
     final userMessage = Message(
@@ -183,5 +200,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
 // Chat provider
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final client = ref.watch(sseClientProvider);
-  return ChatNotifier(client);
+  final connectivity = ref.watch(connectivityServiceProvider);
+  return ChatNotifier(client, connectivity);
 });

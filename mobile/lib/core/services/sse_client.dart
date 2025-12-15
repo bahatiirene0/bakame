@@ -68,6 +68,9 @@ class SSEChatClient {
   StreamController<StreamChunk>? _controller;
   bool _isCancelled = false;
 
+  /// Whether this is a guest user (no auth)
+  bool get isGuest => authToken == null;
+
   SSEChatClient({
     this.baseUrl = ApiConstants.baseUrl,
     this.authToken,
@@ -119,20 +122,50 @@ class SSEChatClient {
           request.headers['Authorization'] = 'Bearer $authToken';
         }
 
-        // Body
-        final body = {
+        // Body - always include isGuest flag
+        final body = <String, dynamic>{
           'messages': messages.map((m) => m.toJson()).toList(),
           'sessionId': sessionId,
           'userLocation': userLocation,
           'uiLanguage': uiLanguage,
+          'isGuest': isGuest, // Always send this flag
         };
         request.body = jsonEncode(body);
+
+        // Log request for debugging
+        debugPrint('SSE Request: ${request.url}');
+        debugPrint('SSE Body: ${request.body}');
+        debugPrint('SSE isGuest: $isGuest');
 
         // Send request
         final response = await _client!.send(request);
 
+        debugPrint('SSE Response status: ${response.statusCode}');
+
         if (response.statusCode != 200) {
-          throw Exception('HTTP ${response.statusCode}');
+          // Try to read error body
+          String errorMsg = 'HTTP ${response.statusCode}';
+          try {
+            final errorBody = await response.stream.bytesToString();
+            debugPrint('SSE Error body: $errorBody');
+            final errorJson = jsonDecode(errorBody);
+            if (errorJson is Map && errorJson['error'] != null) {
+              errorMsg = errorJson['error'].toString();
+            }
+          } catch (_) {
+            // Couldn't parse error body, use default
+          }
+
+          // Map common HTTP errors to user-friendly messages
+          if (response.statusCode == 401) {
+            errorMsg = 'Authentication failed. Please sign in again.';
+          } else if (response.statusCode == 429) {
+            errorMsg = 'Too many requests. Please wait a moment.';
+          } else if (response.statusCode >= 500) {
+            errorMsg = 'Server error. Please try again later.';
+          }
+
+          throw Exception(errorMsg);
         }
 
         // Process SSE stream
