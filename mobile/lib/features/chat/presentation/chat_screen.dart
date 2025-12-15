@@ -305,8 +305,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _showSettings(BuildContext context, WidgetRef ref, bool isDark) {
-    final themeMode = ref.read(themeModeProvider);
-
     showModalBottomSheet(
       context: context,
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
